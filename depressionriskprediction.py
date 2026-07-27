@@ -1,3 +1,8 @@
+"""
+Depression Risk Prediction Application
+Calculates depression screening scores and provides AI (Groq) or local rule-based explanations.
+"""
+
 import os
 from pathlib import Path
 

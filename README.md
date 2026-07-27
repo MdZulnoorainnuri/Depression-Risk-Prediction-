@@ -1,5 +1,9 @@
 # 🧠 Depression Risk Prediction
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.25%2B-red)
+![Groq AI](https://img.shields.io/badge/Groq-Llama--3.3--70b-orange)
+
 An interactive web application built with **Streamlit** that calculates a screening score for depression risk based on self-reported symptoms. It optionally provides AI-powered explanations using the **Groq API (Llama-3.3-70b)** or falls back to a built-in rule-based explanation system.
 
 ---
