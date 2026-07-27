@@ -10,13 +10,28 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 REQUEST_TIMEOUT_SECONDS = 30
 
 
-def load_raw_api_key() -> str | None:
-    """Return the raw API key from the environment or apikey.txt file."""
+def load_raw_api_key(user_key: str = "") -> str | None:
+    """Return the raw API key from user input, Streamlit secrets, environment, or apikey.txt file."""
+    if user_key and user_key.strip():
+        return user_key.strip()
+
+    try:
+        if "GROQ_API_KEY" in st.secrets:
+            return str(st.secrets["GROQ_API_KEY"])
+        if "groq_api_key" in st.secrets:
+            return str(st.secrets["groq_api_key"])
+    except Exception:
+        pass
+
     env_key = os.environ.get("GROQ_API_KEY")
-    if env_key is not None:
-        return env_key
+    if env_key is not None and env_key.strip():
+        return env_key.strip()
+
     if API_KEY_FILE.exists():
-        return API_KEY_FILE.read_text(encoding="utf-8")
+        key = API_KEY_FILE.read_text(encoding="utf-8").strip()
+        if key:
+            return key
+
     return None
 
 
@@ -164,7 +179,7 @@ def query_groq_api(api_key: str, prompt: str) -> str:
     )
 
     if response.status_code == 401:
-        raise requests.HTTPError("Invalid GROQ API Key. Please check apikey.txt.", response=response)
+        raise requests.HTTPError("Invalid GROQ API Key. Please check your key.", response=response)
     if response.status_code == 404:
         raise requests.HTTPError("The selected model does not exist.", response=response)
     if response.status_code == 429:
@@ -205,20 +220,125 @@ def main() -> None:
         layout="centered",
     )
 
+    # Sidebar for API Key Settings
+    st.sidebar.header("🔑 API Settings")
+    st.sidebar.markdown(
+        "To enable AI-powered explanations using Groq LLM, enter your API key below or set `GROQ_API_KEY` in environment / Streamlit secrets."
+    )
+    user_api_key = st.sidebar.text_input(
+        "GROQ API Key",
+        type="password",
+        help="Get a free API key at https://console.groq.com",
+        placeholder="gsk_..."
+    )
+
+    raw_api_key = load_raw_api_key(user_api_key)
+    api_key = normalize_api_key(raw_api_key)
+
+    if api_key:
+        st.sidebar.success("✅ GROQ API Key loaded")
+    else:
+        st.sidebar.info("💡 Running in local mode. Enter a GROQ API key above to enable AI explanations.")
+
     st.title("Depression Risk Prediction")
     st.markdown(
         "This app calculates a simple depression-risk score from self-reported symptoms and can optionally summarize the result using a GROQ model."
     )
 
-    raw_api_key = load_raw_api_key()
-    api_key = normalize_api_key(raw_api_key)
-
-    if raw_api_key is None:
-        st.warning(
-            "No GROQ API key found. Create an `apikey.txt` file or set the `GROQ_API_KEY` environment variable to enable the model explanation feature."
+    with st.form("risk_form"):
+        st.subheader("Symptom input")
+        sleep_hours = st.slider("Average sleep hours per night", 0.0, 12.0, 6.5, 0.5)
+        mood = st.slider("Mood level (1 = good, 5 = very low)", 1, 5, 3)
+        appetite = st.slider("Appetite changes (1 = normal, 5 = very poor)", 1, 5, 3)
+        energy = st.slider("Energy level (1 = normal, 5 = very low)", 1, 5, 3)
+        concentration = st.slider("Concentration difficulties (1 = none, 5 = severe)", 1, 5, 3)
+        social_activity = st.slider(
+            "Interest in social activities (1 = normal, 5 = withdrawn)", 1, 5, 3
         )
-    elif api_key == "":
-        st.warning("Invalid API Key.")
+        submitted = st.form_submit_button("Predict risk")
+
+    if submitted:
+        inputs = {
+            "Sleep hours": f"{sleep_hours:.1f}",
+            "Mood level": mood,
+            "Appetite changes": appetite,
+            "Energy level": energy,
+            "Concentration difficulties": concentration,
+            "Social withdrawal": social_activity,
+        }
+        score = calculate_risk_score(
+            sleep_hours, mood, appetite, energy, concentration, social_activity
+        )
+        classification = classify_risk(score)
+
+        st.metric(label="Depression risk score", value=f"{score}/100", delta=classification)
+        st.write(
+            "### Interpretation",
+            f"**{classification}** — This is a simple screening estimate. It is not a diagnosis."
+        )
+
+        if api_key:
+            st.write("### GROQ model explanation")
+            prompt = build_groq_prompt(inputs, score, classification)
+            try:
+                explanation = query_groq_api(api_key, prompt)
+                st.text_area("GROQ explanation", explanation, height=220)
+            except requests.exceptions.Timeout:
+                st.error("Connection timed out while contacting Groq.")
+                st.info(
+                    "Falling back to a local explanation. You can still use the risk score shown above. "
+                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
+                )
+                display_local_fallback(inputs, score, classification)
+            except requests.HTTPError as error:
+                message = str(error)
+                if "Invalid GROQ API Key" in message:
+                    st.error("Invalid GROQ API Key. Please check your key.")
+                elif "The selected model does not exist" in message:
+                    st.error("The selected model does not exist.")
+                elif "Rate limit exceeded" in message:
+                    st.error("Rate limit exceeded. Please wait and try again.")
+                elif "Groq server error" in message:
+                    st.error("Groq server error. Please try again later.")
+                else:
+                    st.error(f"Failed to call Groq API: {message}")
+                st.info(
+                    "Falling back to a local explanation. You can still use the risk score shown above. "
+                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
+                )
+                display_local_fallback(inputs, score, classification)
+            except requests.exceptions.RequestException as error:
+                if is_network_error(error):
+                    st.error(
+                        "Unable to connect to the Groq API. Check your internet connection, DNS settings, firewall, proxy, or VPN."
+                    )
+                else:
+                    st.error(f"Failed to call Groq API: {error}")
+                st.info(
+                    "Falling back to a local explanation. You can still use the risk score shown above. "
+                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
+                )
+                display_local_fallback(inputs, score, classification)
+            except ValueError as error:
+                st.error(f"Failed to parse Groq response: {error}")
+                st.info(
+                    "Falling back to a local explanation. You can still use the risk score shown above. "
+                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
+                )
+                display_local_fallback(inputs, score, classification)
+        else:
+            st.write("### Local explanation")
+            st.text_area("Explanation", generate_local_explanation(inputs, score, classification), height=260)
+
+    st.markdown("---")
+    st.info(
+        "This tool is for educational use only. If you are concerned about your mental health, please contact a qualified professional."
+    )
+
+
+if __name__ == "__main__":
+    main()
+
 
     with st.form("risk_form"):
         st.subheader("Symptom input")
