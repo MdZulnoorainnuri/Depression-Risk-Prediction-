@@ -9,42 +9,38 @@ from pathlib import Path
 import requests
 import streamlit as st
 
-API_KEY_FILE = Path(__file__).with_name("apikey.txt")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 REQUEST_TIMEOUT_SECONDS = 30
 
 
-def load_raw_api_key(user_key: str = "") -> str | None:
-    """Return the raw API key from user input, Streamlit secrets, environment, or apikey.txt file."""
-    if user_key and user_key.strip():
-        return user_key.strip()
+def load_api_key(sidebar_input: str = "") -> str:
+    """Load API key in priority: 1) Sidebar input, 2) st.secrets, 3) Environment variable, 4) apikey.txt file."""
+    if sidebar_input and sidebar_input.strip():
+        return sidebar_input.strip()
 
     try:
-        if "GROQ_API_KEY" in st.secrets:
-            return str(st.secrets["GROQ_API_KEY"])
-        if "groq_api_key" in st.secrets:
-            return str(st.secrets["groq_api_key"])
+        if "GROQ_API_KEY" in st.secrets and str(st.secrets["GROQ_API_KEY"]).strip():
+            return str(st.secrets["GROQ_API_KEY"]).strip()
+        if "groq_api_key" in st.secrets and str(st.secrets["groq_api_key"]).strip():
+            return str(st.secrets["groq_api_key"]).strip()
     except Exception:
         pass
 
     env_key = os.environ.get("GROQ_API_KEY")
-    if env_key is not None and env_key.strip():
+    if env_key and env_key.strip():
         return env_key.strip()
 
-    if API_KEY_FILE.exists():
-        key = API_KEY_FILE.read_text(encoding="utf-8").strip()
-        if key:
-            return key
+    api_file = Path(__file__).with_name("apikey.txt")
+    if api_file.exists():
+        try:
+            key = api_file.read_text(encoding="utf-8").strip()
+            if key and not key.startswith("#"):
+                return key
+        except Exception:
+            pass
 
-    return None
-
-
-def normalize_api_key(raw_key: str | None) -> str:
-    """Normalize the raw API key and return an empty string for invalid values."""
-    if raw_key is None:
-        return ""
-    return raw_key.strip()
+    return ""
 
 
 def calculate_risk_score(
@@ -55,6 +51,7 @@ def calculate_risk_score(
     concentration: int,
     social_activity: int,
 ) -> int:
+    """Calculate depression risk score (0-100) based on symptom inputs."""
     sleep_penalty = 0
     if sleep_hours <= 4:
         sleep_penalty = 30
@@ -82,140 +79,158 @@ def calculate_risk_score(
     return min(max(int(raw_score), 0), 100)
 
 
-def classify_risk(score: int) -> str:
+def classify_risk(score: int) -> tuple[str, str, str]:
+    """Return risk classification tuple: (label, badge_color_type, emoji)."""
     if score >= 75:
-        return "High risk"
+        return ("High Risk", "red", "🔴")
     if score >= 45:
-        return "Moderate risk"
-    return "Low risk"
+        return ("Moderate Risk", "orange", "🟠")
+    return ("Low Risk", "green", "🟢")
 
 
-def build_groq_prompt(inputs: dict, score: int, classification: str) -> str:
-    lines = [
-        "You are a compassionate mental health assistant.",
-        "The user has provided the following symptom ratings:",
+def get_groq_explanation(inputs: dict, score: int, classification: str, api_key: str) -> tuple[str | None, str | None]:
+    """
+    Call Groq API to get an AI-generated explanation.
+    Returns (explanation_markdown, error_message).
+    """
+    system_prompt = (
+        "You are a supportive mental health education assistant. "
+        "You never diagnose. "
+        "Explain results in simple language. "
+        "Use bullet points. "
+        "Suggest healthy coping strategies. "
+        "End with a reminder to seek professional help if symptoms persist."
+    )
+
+    user_content = [
+        "The user provided the following symptom assessment ratings:",
     ]
     for key, value in inputs.items():
-        lines.append(f"- {key}: {value}")
+        user_content.append(f"- {key}: {value}")
 
-    lines.extend(
-        [
-            f"Calculated risk score: {score} out of 100",
-            f"Risk classification: {classification}",
-            "Please provide a short explanation of what this means and suggest healthy next steps, without giving medical advice.",
-        ]
-    )
-    return "\n".join(lines)
+    user_content.extend([
+        f"Calculated Risk Score: {score}/100",
+        f"Risk Level: {classification}",
+        "Please provide a structured summary with observations and practical healthy next steps."
+    ])
 
-
-def generate_local_explanation(inputs: dict, score: int, classification: str) -> str:
-    explanation_lines = [
-        f"Your estimated risk score is {score} out of 100, which is classified as {classification}.",
-        "This score is a simple screening estimate based on self-reported symptoms, not a diagnosis.",
-        "Key observations:",
-    ]
-
-    for key, value in inputs.items():
-        explanation_lines.append(f"- {key}: {value}")
-
-    if classification == "High risk":
-        explanation_lines.append(
-            "A high risk score may indicate a stronger need for professional support, especially if these symptoms have worsened or lasted more than two weeks."
-        )
-    elif classification == "Moderate risk":
-        explanation_lines.append(
-            "A moderate risk score suggests some concerning symptoms that may benefit from closer monitoring and self-care."
-        )
-    else:
-        explanation_lines.append(
-            "A low risk score means your current symptoms are milder, but it is still important to stay aware of changes over time."
-        )
-
-    explanation_lines.extend(
-        [
-            "Suggested healthy next steps:",
-            "- Keep a regular sleep schedule and aim for consistent sleep duration.",
-            "- Stay connected with supportive friends or family.",
-            "- Engage in physical activity, even short daily walks.",
-            "- Practice stress-reduction techniques like breathing exercises, journaling, or mindfulness.",
-            "- Reach out to a qualified healthcare provider if symptoms persist or worsen.",
-        ]
-    )
-    return "\n".join(explanation_lines)
-
-
-def build_groq_request_payload(prompt: str) -> dict:
-    return {
+    payload = {
         "model": GROQ_MODEL,
         "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "\n".join(user_content)},
         ],
-        "temperature": 0.2,
-        "max_tokens": 256,
+        "temperature": 0.3,
+        "max_tokens": 400,
     }
 
-
-def parse_groq_response(response_json: dict) -> str:
-    if not isinstance(response_json, dict):
-        raise ValueError("Unexpected response format from Groq API.")
-
-    try:
-        return response_json["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("Unexpected Groq response structure.") from exc
-
-
-def query_groq_api(api_key: str, prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    payload = build_groq_request_payload(prompt)
+    try:
+        response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=REQUEST_TIMEOUT_SECONDS)
+        
+        if response.status_code == 401:
+            return None, "Invalid API key."
+        if response.status_code == 404:
+            return None, "Model unavailable."
+        if response.status_code == 429:
+            return None, "Rate limit exceeded."
+        if response.status_code >= 500:
+            return None, "Groq server error."
 
-    response = requests.post(
-        GROQ_API_URL,
-        headers=headers,
-        json=payload,
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
+        response.raise_for_status()
+        res_json = response.json()
+        content = res_json["choices"][0]["message"]["content"]
+        return content, None
 
-    if response.status_code == 401:
-        raise requests.HTTPError("Invalid GROQ API Key. Please check your key.", response=response)
-    if response.status_code == 404:
-        raise requests.HTTPError("The selected model does not exist.", response=response)
-    if response.status_code == 429:
-        raise requests.HTTPError("Rate limit exceeded. Please wait and try again.", response=response)
-    if response.status_code == 500:
-        raise requests.HTTPError("Groq server error. Please try again later.", response=response)
-
-    response.raise_for_status()
-    return parse_groq_response(response.json())
-
-
-def is_network_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return any(
-        token in message
-        for token in [
-            "failed to resolve",
-            "name resolution",
-            "getaddrinfo failed",
-            "max retries exceeded",
-            "temporary failure in name resolution",
-            "could not connect",
-            "connection aborted",
-            "connection reset",
-        ]
-    )
+    except requests.exceptions.Timeout:
+        return None, "Groq request timed out."
+    except requests.exceptions.RequestException:
+        return None, "Cannot connect to Groq."
+    except (KeyError, IndexError, ValueError, TypeError):
+        return None, "Unexpected response format from Groq."
 
 
-def display_local_fallback(inputs: dict, score: int, classification: str) -> None:
-    local_explanation = generate_local_explanation(inputs, score, classification)
-    st.text_area("Local fallback explanation", local_explanation, height=260)
+def generate_local_explanation(inputs: dict, score: int, classification: str) -> str:
+    """Generate structured markdown local explanation matching the AI format."""
+    lines = [
+        "## Summary",
+        f"Based on your self-reported symptoms, your estimated depression risk score is **{score}/100** ({classification}).",
+        "",
+        "### Explanation & Observations",
+    ]
+
+    for key, value in inputs.items():
+        lines.append(f"- **{key}**: {value}")
+
+    lines.append("")
+    if classification == "High Risk":
+        lines.append(
+            "Your symptom ratings indicate elevated intensity across key areas. "
+            "This suggests a stronger potential need for supportive care and professional consultation."
+        )
+    elif classification == "Moderate Risk":
+        lines.append(
+            "Your symptom ratings indicate moderate intensity. "
+            "Close self-monitoring, stress reduction, and healthy daily habits are recommended."
+        )
+    else:
+        lines.append(
+            "Your symptom ratings indicate mild or low intensity. "
+            "Continuing positive health habits and maintaining active social connections will support ongoing well-being."
+        )
+
+    lines.extend([
+        "",
+        "### Suggested Healthy Next Steps",
+        "- **Consistent Sleep Routine**: Aim for 7–9 hours of regular, restful sleep every night.",
+        "- **Physical Activity**: Engage in daily light movement, such as a 20-minute outdoor walk.",
+        "- **Social Connection**: Stay in regular touch with supportive friends, family, or community.",
+        "- **Mindfulness & Stress Reduction**: Practice daily deep breathing exercises, journaling, or meditation.",
+        "- **Professional Consultation**: Speak with a licensed medical professional if symptoms persist or interfere with daily life.",
+    ])
+
+    return "\n".join(lines)
+
+
+def display_results(inputs: dict, score: int, classification: str, color_type: str, emoji: str, api_key: str) -> None:
+    """Display assessment results using structured Streamlit metrics, cards, and expanders."""
+    st.markdown("## 📊 Assessment Results")
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.metric(label="Risk Score", value=f"{score}/100")
+    with col2:
+        st.markdown(f"### Risk Level: {emoji} **{classification}**")
+        if color_type == "red":
+            st.error("High risk detected. Professional consultation is strongly advised.")
+        elif color_type == "orange":
+            st.warning("Moderate risk detected. Close self-monitoring is recommended.")
+        else:
+            st.success("Low risk detected. Continue maintaining healthy habits.")
+
+    st.markdown("---")
+
+    explanation_content = None
+    used_ai = False
+
+    if api_key:
+        with st.spinner("Generating AI-powered explanation..."):
+            explanation_content, err_msg = get_groq_explanation(inputs, score, classification, api_key)
+            if explanation_content:
+                used_ai = True
+            else:
+                st.info(f"ℹ️ {err_msg} Falling back to local explanation.")
+
+    if not used_ai:
+        explanation_content = generate_local_explanation(inputs, score, classification)
+
+    expander_title = "🤖 AI-Powered Explanation" if used_ai else "📋 Structured Local Explanation"
+    with st.expander(expander_title, expanded=True):
+        st.markdown(explanation_content)
 
 
 def main() -> None:
@@ -225,33 +240,37 @@ def main() -> None:
         layout="centered",
     )
 
-    # Sidebar for API Key Settings
-    st.sidebar.header("🔑 API Settings")
-    st.sidebar.markdown(
-        "To enable AI-powered explanations using Groq LLM, enter your API key below or set `GROQ_API_KEY` in environment / Streamlit secrets."
-    )
+    # Sidebar: AI Settings
+    st.sidebar.markdown("### 🔑 AI Settings")
+    st.sidebar.markdown("Enter your Groq API key below to enable AI-powered explanations:")
+    
     user_api_key = st.sidebar.text_input(
-        "GROQ API Key",
+        "Groq API Key",
         type="password",
-        help="Get a free API key at https://console.groq.com",
-        placeholder="gsk_..."
+        help="Get a free key from https://console.groq.com",
+        placeholder="gsk_...",
     )
 
-    raw_api_key = load_raw_api_key(user_api_key)
-    api_key = normalize_api_key(raw_api_key)
+    api_key = load_api_key(user_api_key)
 
+    st.sidebar.markdown("**Status:**")
     if api_key:
-        st.sidebar.success("✅ GROQ API Key loaded")
+        st.sidebar.success("✅ Connected")
     else:
-        st.sidebar.info("💡 Running in local mode. Enter a GROQ API key above to enable AI explanations.")
+        st.sidebar.info("ℹ️ AI disabled (using local explanation)")
 
+    st.sidebar.markdown("---")
+    st.sidebar.caption("AI explanation is optional. Enter a Groq API key in the sidebar to enable AI-powered explanations.")
+
+    # Main Header
     st.title("Depression Risk Prediction")
     st.markdown(
-        "This app calculates a simple depression-risk score from self-reported symptoms and can optionally summarize the result using a GROQ model."
+        "This tool calculates a depression-risk score based on self-reported symptoms and provides an explanation using Groq LLM or a built-in local engine."
     )
 
+    # Form
     with st.form("risk_form"):
-        st.subheader("Symptom input")
+        st.subheader("Symptom Input")
         sleep_hours = st.slider("Average sleep hours per night", 0.0, 12.0, 6.5, 0.5)
         mood = st.slider("Mood level (1 = good, 5 = very low)", 1, 5, 3)
         appetite = st.slider("Appetite changes (1 = normal, 5 = very poor)", 1, 5, 3)
@@ -260,84 +279,29 @@ def main() -> None:
         social_activity = st.slider(
             "Interest in social activities (1 = normal, 5 = withdrawn)", 1, 5, 3
         )
-        submitted = st.form_submit_button("Predict risk")
+        submitted = st.form_submit_button("Predict Risk")
 
     if submitted:
         inputs = {
-            "Sleep hours": f"{sleep_hours:.1f}",
-            "Mood level": mood,
-            "Appetite changes": appetite,
-            "Energy level": energy,
-            "Concentration difficulties": concentration,
-            "Social withdrawal": social_activity,
+            "Sleep Hours": f"{sleep_hours:.1f} hrs",
+            "Mood Level": f"{mood}/5",
+            "Appetite Changes": f"{appetite}/5",
+            "Energy Level": f"{energy}/5",
+            "Concentration Difficulties": f"{concentration}/5",
+            "Social Withdrawal": f"{social_activity}/5",
         }
         score = calculate_risk_score(
             sleep_hours, mood, appetite, energy, concentration, social_activity
         )
-        classification = classify_risk(score)
+        classification, color_type, emoji = classify_risk(score)
 
-        st.metric(label="Depression risk score", value=f"{score}/100", delta=classification)
-        st.write(
-            "### Interpretation",
-            f"**{classification}** — This is a simple screening estimate. It is not a diagnosis."
-        )
+        display_results(inputs, score, classification, color_type, emoji, api_key)
 
-        if api_key:
-            st.write("### GROQ model explanation")
-            prompt = build_groq_prompt(inputs, score, classification)
-            try:
-                explanation = query_groq_api(api_key, prompt)
-                st.text_area("GROQ explanation", explanation, height=220)
-            except requests.exceptions.Timeout:
-                st.error("Connection timed out while contacting Groq.")
-                st.info(
-                    "Falling back to a local explanation. You can still use the risk score shown above. "
-                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
-                )
-                display_local_fallback(inputs, score, classification)
-            except requests.HTTPError as error:
-                message = str(error)
-                if "Invalid GROQ API Key" in message:
-                    st.error("Invalid GROQ API Key. Please check your key.")
-                elif "The selected model does not exist" in message:
-                    st.error("The selected model does not exist.")
-                elif "Rate limit exceeded" in message:
-                    st.error("Rate limit exceeded. Please wait and try again.")
-                elif "Groq server error" in message:
-                    st.error("Groq server error. Please try again later.")
-                else:
-                    st.error(f"Failed to call Groq API: {message}")
-                st.info(
-                    "Falling back to a local explanation. You can still use the risk score shown above. "
-                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
-                )
-                display_local_fallback(inputs, score, classification)
-            except requests.exceptions.RequestException as error:
-                if is_network_error(error):
-                    st.error(
-                        "Unable to connect to the Groq API. Check your internet connection, DNS settings, firewall, proxy, or VPN."
-                    )
-                else:
-                    st.error(f"Failed to call Groq API: {error}")
-                st.info(
-                    "Falling back to a local explanation. You can still use the risk score shown above. "
-                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
-                )
-                display_local_fallback(inputs, score, classification)
-            except ValueError as error:
-                st.error(f"Failed to parse Groq response: {error}")
-                st.info(
-                    "Falling back to a local explanation. You can still use the risk score shown above. "
-                    "The GROQ explanation feature requires outbound HTTPS access to api.groq.com."
-                )
-                display_local_fallback(inputs, score, classification)
-        else:
-            st.write("### Local explanation")
-            st.text_area("Explanation", generate_local_explanation(inputs, score, classification), height=260)
-
+    # Single Global Disclaimer (Requirement 10)
     st.markdown("---")
     st.info(
-        "This tool is for educational use only. If you are concerned about your mental health, please contact a qualified professional."
+        "⚠️ **Disclaimer**: This tool is for educational and screening purposes only. "
+        "It does not provide a medical diagnosis. If you are concerned about your mental health, please consult a qualified healthcare professional."
     )
 
 
