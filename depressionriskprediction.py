@@ -253,14 +253,10 @@ def main() -> None:
 
     api_key = load_api_key(user_api_key)
 
-    st.sidebar.markdown("**Status:**")
     if api_key:
-        st.sidebar.success("✅ Connected")
+        st.sidebar.success("✅ AI explanations enabled")
     else:
-        st.sidebar.info("ℹ️ AI disabled (using local explanation)")
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("AI explanation is optional. Enter a Groq API key in the sidebar to enable AI-powered explanations.")
+        st.sidebar.info("ℹ AI explanations are optional. The app is running with the built-in local explanation.")
 
     # Main Header
     st.title("Depression Risk Prediction")
