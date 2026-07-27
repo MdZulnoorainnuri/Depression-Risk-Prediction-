@@ -1,7 +1,9 @@
 # API Keys & Environment Variables
 apikey.txt
+!apikey.txt.example
 .env
 *.env
+!.env.example
 .env.*
 *.pem
 *.key
