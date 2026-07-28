@@ -8,6 +8,10 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (if present)
+load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -15,7 +19,7 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 
 def load_api_key(sidebar_input: str = "") -> str:
-    """Load API key in priority: 1) Sidebar input, 2) st.secrets, 3) Environment variable, 4) apikey.txt file."""
+    """Load API key in priority: 1) Sidebar input, 2) st.secrets, 3) .env / Environment variable, 4) apikey.txt file."""
     if sidebar_input and sidebar_input.strip():
         return sidebar_input.strip()
 
