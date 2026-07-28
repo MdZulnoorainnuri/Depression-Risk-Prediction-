@@ -8,6 +8,8 @@ apikey.txt
 *.pem
 *.key
 secrets/
+.streamlit/secrets.toml
+!.streamlit/secrets.toml.example
 
 # Python Cache & Byte-code
 __pycache__/

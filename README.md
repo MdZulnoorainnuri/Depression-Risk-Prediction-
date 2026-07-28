@@ -40,14 +40,31 @@ streamlit run depressionriskprediction.py
 ## 🔑 Setting Up GROQ API Key (Optional)
 To enable AI explanations, get a free API key from [Console Groq](https://console.groq.com):
 
-- **Option A (Sidebar UI)**: Enter your key directly in the sidebar under `🔑 API Settings`.
+- **Option A (Sidebar UI)**: Enter your key directly in the sidebar under `🔑 AI Settings`.
 - **Option B (File)**: Create an `apikey.txt` file in the project folder and paste your key.
-- **Option C (Environment)**: Set `GROQ_API_KEY=your_key_here` in your environment.
-- **Option D (Streamlit Cloud)**: Add `GROQ_API_KEY = "your_key_here"` under **Secrets**.
+- **Option C (.env)**: Create a `.env` file in the project folder with `GROQ_API_KEY=your_key_here`.
+- **Option D (Streamlit Cloud)**: See the section below ↓
 
 *If no key is provided, the app runs cleanly in local explanation mode.*
 
 ---
 
+## ☁️ Deploying on Streamlit Cloud (Enable Groq AI)
+
+When deployed on **Streamlit Community Cloud**, the `.env` and `apikey.txt` files are not available (they are gitignored for security). You must add your API key via **Streamlit Secrets** instead:
+
+1. Go to [share.streamlit.io](https://share.streamlit.io) and open your deployed app.
+2. Click the **⋮ (three-dot) menu** → **Settings** → **Secrets**.
+3. Paste the following into the secrets editor:
+   ```toml
+   GROQ_API_KEY = "gsk_your_actual_groq_api_key_here"
+   ```
+4. Click **Save** — the app will automatically restart and AI explanations will be enabled.
+
+> 💡 See `.streamlit/secrets.toml.example` in this repo for a ready-to-use template.
+
+---
+
 ## ⚠️ Disclaimer
 *This tool is for educational and screening purposes only. It does not provide medical diagnoses. If you are experiencing mental health difficulties, please consult a qualified healthcare professional.*
+
